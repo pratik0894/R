@@ -1,0 +1,241 @@
+---
+title: "Assignment3-Pratik-COVID_Vaccine_Sentiment.Rmd"
+author: "Pratik Chaudhari"
+date: "4/14/2021"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+# Data Source:
+https://www.kaggle.com/gpreda/all-covid19-vaccines-tweets
+
+# Background:
+COVID-19 is an infectious disease caused by a newly discovered strain of coronavirus, a type of virus known to cause respiratory infections in humans. This new strain was unknown before December 2019. Ever since the Covid-19 pandemic there has been quite a buzz in social media platforms and news sites regarding the need for COVID-19 Vaccine. Hence, the data consist of recent tweets about COVID - 19 vaccines used in entire world on large scale, as following:
+
+* Pfizer/BioNTech
+* Sinopharm
+* Sinovac
+* Moderna
+* Oxford/AstraZeneca
+* Covaxin
+* Sputnik V.
+
+We will be focusing on the sentiments or the emotions of the people post taking the shots for COVID vaccine.
+
+# Variables:
+
+* **id:** User ID   
+* **user_name:** username of the user   
+* **user_location:** Location of the User
+* **user_description:** Description of the User
+* **user_created:** Date of user account creation
+* **user_followers:** Number of followers of the User
+* **user_friends:** Number of friends of the User
+* **user_favorites:** Number of Users marked favorite by the account holder
+* **user_verified:** Is the User a verified User or not
+* **date:** Date when the tweet was tweeted
+* **text:** Text of the tweet
+* **hastags:** Hashtags used in the tweets
+* **source:** Source device from where the tweet was tweeted
+* **retweets:** Count of retweets for the shared tweet
+
+## Loading the necessary Libraries:
+```{r, message=FALSE}
+library(qdap)
+library(tidytext)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(dplyr)
+library(cowplot)
+library(lubridate)
+library(vader)
+library(corpus)
+library(SnowballC)
+library(twitteR)
+library(tm)
+library(wordcloud)
+library(syuzhet)
+library(knitr)
+library(naniar)
+library(GGally)
+```
+# Reading the data from .csv to r:
+```{r}
+# Reading the data and Converting blank spaces to NA
+
+testdata <- read.csv("vaccination.csv", header=T, na.strings=c("","NA"))
+
+kable(testdata[1:5,], caption = "Dataframe")
+```
+ 
+ 
+# Data Cleaning:
+* Here we can see the variables, and can have some idea about their type and what they contain.
+First, we will try to see if there are any missing values in this dataset. For that a 'naniar' library is loaded.
+* Let's see the number of missing values for each variables and then plot the graphs for better visualization. In the first graph the number of missing values are plotted, in the 2nd one the percentage of the same are visualized.
+```{r}
+colSums(is.na(testdata))
+gg_miss_var(testdata) + labs(y = "The number of missing values")
+gg_miss_var(testdata, show_pct = TRUE) + labs(y = "The Percentage of missing values")
+```
+
+Dropping the **NA** values for getting better and more accurate results.
+
+```{r}
+testdata = na.omit(testdata)
+
+kable(testdata[1:3,], caption = "Dataframe after dropping 'NA")
+```
+# Data Visualization:
+Let's try to see whether there's any correlation between the number of retweets and favorites. Because, in reality, we would assume to have a strong correlation between them.
+```{r}
+ggplot(testdata, aes(x=retweets, y=favorites)) + geom_point(size=2, color='Blue') +
+  labs(x="Retweets", y="Favorites")
+```
+
+From the above graph we can observe that there is somewhat strong relation between the retweets and favorites. Lets confrim it with the cor() function.
+```{r}
+cor(testdata$retweets, testdata$favorites)
+```
+
+Now, Let's check the correlation between the users followers and retweets
+```{r}
+ggplot(testdata, aes(x=user_followers, y=retweets)) + geom_point(size=2, color='Dark green')
+
+cor(testdata$user_followers, testdata$retweets)
+```
+From this, we can conclude that, having more followers and having more retweets have almost no correlation. So there are chances that, the tweets were Retweeted due to some other reasons. Like quality or for having same/relevant hashtags etc.
+
+Now, Let's check the correlation matrix for all the numerical variables, excluding the id as it has no relevance.
+```{r}
+ggcorr(testdata[,-1], palette = "RdGy", label = TRUE)
+```
+
+Now, Let's plot the count of verified and un-verified users
+```{r}
+ggplot(testdata, aes(x=user_verified)) + geom_bar(aes(fill=user_verified)) + 
+  labs(y="Count")
+```
+\
+As expected. Most users aren't verified.
+
+Now, Let's check from which platform (source) the tweets were made. Let's first check how many total sources are there.
+```{r}
+unique(testdata$source)
+```
+Summing all of them in a graph may become tedious and messy. So, for convenience we will analyse the top 10 sources. First let's store it in a new variable 'df1'
+```{r}
+df1 <- testdata %>%
+  group_by(source) %>%
+  summarise(count=n()) %>%
+  top_n(n=10)
+
+df1
+
+ggplot(data=df1, aes(x=source, y=count)) + geom_bar(aes(fill=source), stat='identity') +
+  theme(axis.text.x=element_blank())
+```
+
+# Cleaning Data (Tweets) for Sentiment Analysis:
+Convert all text to lower case
+```{r}
+testdata$text <- iconv(testdata$text,"WINDOWS-1252","UTF-8")
+testdata_text <- tolower(testdata$text)
+```
+Replace blank space 
+```{r}
+testdata_text <- gsub("rt", "", testdata_text)
+```
+Replace @UserName
+```{r}
+testdata_text <- gsub("@\\w+", "", testdata_text)
+```
+
+Remove punctuation
+```{r}
+testdata_text <- gsub("[[:punct:]]", "", testdata_text)
+```
+
+Remove links
+```{r}
+testdata_text <- gsub("http\\w+", "", testdata_text)
+```
+
+Remove tabs
+```{r}
+testdata_text <- gsub("[ |\t]{2,}", "", testdata_text)
+```
+Remove blank spaces at the beginning
+```{r}
+testdata_text <- gsub("^ ", "", testdata_text)
+```
+
+Remove blank spaces at the end
+```{r}
+testdata_text <- gsub(" $", "", testdata_text)
+```
+
+### Stop word handling:
+Corpus build - remove stop words
+```{r}
+testdata_text_corpus <- Corpus(VectorSource(testdata_text))
+testdata_text_corpus <- tm_map(testdata_text_corpus, function(x)removeWords(x,stopwords()))
+```
+Let's display the frequently used words using **word-cloud**
+```{r}
+wordcloud(testdata_text_corpus,min.freq = 500,colors=brewer.pal(8, "Dark2"),random.color = TRUE,max.words = 15000)
+```
+
+# Sentiment Analysis:
+Sentiment analysis is typically performed based on a lexicon of sentiment keywords.There are three such sentiment lexicons in **tidytext**:
+
+* The **nrc** lexicon: word and their sentiment category
+* The **bing** lexicon: word and their polarity (negative or positive)
+* The **ann** lexicon: word and their numeric sentiment score
+```{r}
+testdata_text_sent<-get_nrc_sentiment((testdata_text))
+```
+Now, Let's calculate the total score for each sentiment
+```{r}
+testdata_text_sent_score<-data.frame(colSums(testdata_text_sent[,]))
+
+names(testdata_text_sent_score)<-"Score"
+testdata_text_sent_score<-cbind("sentiment"=rownames(testdata_text_sent_score),testdata_text_sent_score)
+rownames(testdata_text_sent_score)<-NULL
+```
+
+Now, Let's plot the sentiments with scores
+```{r}
+ggplot(data=testdata_text_sent_score,aes(x=sentiment,y=Score))+geom_bar(aes(fill=sentiment),stat = "identity")+
+  theme(legend.position="none")+
+  xlab("Sentiments")+ylab("scores")+ggtitle("Sentiments of people ")
+```
+\   
+Let's remove positive , negative score 
+```{r}
+testdata_text_sent<-get_nrc_sentiment((testdata_text))
+
+testdata_text_sent_no_pos_neg<-select(testdata_text_sent,anger,anticipation,disgust,joy,sadness,surprise,trust)
+```
+Now, Let's calculate the total score for each sentiment
+```{r}
+testdata_text_sent_no_pos_neg<-data.frame(colSums(testdata_text_sent_no_pos_neg[,]))
+
+names(testdata_text_sent_no_pos_neg)<-"Score"
+testdata_text_sent_no_pos_neg<-cbind("sentiment"=rownames(testdata_text_sent_no_pos_neg),testdata_text_sent_no_pos_neg)
+rownames(testdata_text_sent_no_pos_neg)<-NULL
+```
+
+Now, Let's plot the sentiments with scores
+```{r}
+ggplot(data=testdata_text_sent_no_pos_neg,aes(x=sentiment,y=Score))+geom_bar(aes(fill=sentiment),stat = "identity")+
+  theme(legend.position="none")+
+  xlab("Sentiments")+ylab("scores")+ggtitle("Sentiments of people ")
+```
+
+# Conclusion:
+From the above graph, we can conclude that, people are showing trust and overall positive emotions for the covid vaccine . The anticipation of people is high.
